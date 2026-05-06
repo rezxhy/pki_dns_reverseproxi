@@ -1,0 +1,280 @@
+═══════════════════════════════════════════════════════════════════════
+  ACRYLIC DNS PROXY — README & GUIDE COMPLET
+  Projet PKI Docker / WSL / jeu-2002.home.arpa
+═══════════════════════════════════════════════════════════════════════
+
+  Objectif : Accéder à https://jeu-2002.home.arpa/ depuis Windows,
+  en passant par un conteneur Docker Nginx (WSL) avec certificat SSL
+  signé par une PKI maison (Root CA + AC intermédiaires).
+
+  Architecture :
+    Browser Windows
+        │
+        ▼
+    Acrylic DNS (127.0.0.1:53)  ← proxy DNS local Windows
+        │  résout jeu-2002.home.arpa → 172.23.66.58
+        ▼
+    WSL (IP : 172.23.66.58)
+        │
+        ▼
+    Docker port 443 → machine3_webserver (Nginx HTTPS)
+
+
+───────────────────────────────────────────────────────────────────────
+  ÉTAPE 1 — VÉRIFIER QUE LE PORT 443 EST ACCESSIBLE DEPUIS WINDOWS
+───────────────────────────────────────────────────────────────────────
+
+  Commande :
+    Test-NetConnection -ComputerName 172.23.66.58 -Port 443
+
+  Explication :
+    - Test-NetConnection : cmdlet PowerShell qui teste la connectivité réseau
+    - -ComputerName 172.23.66.58 : adresse IP de la machine WSL
+    - -Port 443 : port HTTPS standard
+    → Si "TcpTestSucceeded : True" → Docker et WSL sont bien joignables
+    → Si "False" → problème de pare-feu ou Docker non démarré
+
+  Résultat obtenu :
+    TcpTestSucceeded : True  ✅
+
+
+───────────────────────────────────────────────────────────────────────
+  ÉTAPE 2 — VÉRIFIER QUEL DNS UTILISE WINDOWS SUR CHAQUE INTERFACE
+───────────────────────────────────────────────────────────────────────
+
+  Commande :
+    Get-DnsClientServerAddress | Where-Object {
+      $_.InterfaceAlias -like "*WSL*" -or
+      $_.InterfaceAlias -like "*Wi-Fi*" -or
+      $_.InterfaceAlias -like "*Ethernet*"
+    }
+
+  Explication :
+    - Get-DnsClientServerAddress : liste les serveurs DNS configurés
+      sur toutes les interfaces réseau Windows
+    - Where-Object { ... } : filtre les résultats pour n'afficher que
+      les interfaces pertinentes (WSL, Wi-Fi, Ethernet)
+    - $_.InterfaceAlias -like "*Wi-Fi*" : condition sur le nom
+      de l'interface (le * est un joker)
+
+  Problème détecté :
+    L'interface Wi-Fi pointait vers 172.23.66.58 (IP WSL directement)
+    au lieu de 127.0.0.1 (Acrylic). Or le bind9 Docker écoute sur
+    le port 5454, pas 53 → les requêtes DNS échouaient.
+
+
+───────────────────────────────────────────────────────────────────────
+  ÉTAPE 3 — CORRIGER LE DNS DE L'INTERFACE WI-FI VERS ACRYLIC
+───────────────────────────────────────────────────────────────────────
+
+  Commande :
+    Set-DnsClientServerAddress -InterfaceAlias "Wi-Fi" -ServerAddresses ("127.0.0.1", "8.8.8.8")
+
+  Explication :
+    - Set-DnsClientServerAddress : modifie les serveurs DNS d'une interface
+    - -InterfaceAlias "Wi-Fi" : cible l'interface Wi-Fi
+    - -ServerAddresses ("127.0.0.1", "8.8.8.8") :
+        • 127.0.0.1 = Acrylic en premier (DNS local)
+        • 8.8.8.8   = Google DNS en fallback (pour le reste d'internet)
+
+
+───────────────────────────────────────────────────────────────────────
+  ÉTAPE 4 — VÉRIFIER QU'ACRYLIC ÉCOUTE BIEN SUR LE PORT 53
+───────────────────────────────────────────────────────────────────────
+
+  Commande :
+    netstat -ano | findstr ":53 "
+
+  Explication :
+    - netstat -ano : affiche toutes les connexions réseau actives
+        • -a : toutes les connexions et ports en écoute
+        • -n : adresses en format numérique (pas de résolution DNS)
+        • -o : affiche le PID (identifiant du processus)
+    - | findstr ":53 " : filtre les lignes contenant ":53 "
+      (le port DNS standard)
+
+  Commande pour identifier le processus :
+    tasklist | findstr 3396
+
+  Explication :
+    - tasklist : liste tous les processus Windows en cours
+    - | findstr 3396 : filtre par PID pour identifier le programme
+    → Résultat : AcrylicService.exe = Acrylic écoute bien sur le port 53 ✅
+
+
+───────────────────────────────────────────────────────────────────────
+  ÉTAPE 5 — VÉRIFIER LE CONTENU DU FICHIER HOSTS ACRYLIC
+───────────────────────────────────────────────────────────────────────
+
+  Commande :
+    Get-Content "C:\Program Files (x86)\Acrylic DNS Proxy\AcrylicHosts.txt" | Select-String "home.arpa"
+
+  Explication :
+    - Get-Content : lit le contenu d'un fichier texte
+    - | Select-String "home.arpa" : filtre les lignes contenant
+      "home.arpa" (équivalent de grep sous Linux)
+    → Vérifie que la ligne de résolution est bien présente dans le fichier
+
+
+───────────────────────────────────────────────────────────────────────
+  ÉTAPE 6 — AJOUTER L'ENTRÉE DNS DANS ACRYLIC HOSTS
+───────────────────────────────────────────────────────────────────────
+
+  Commande :
+    Add-Content "C:\Program Files (x86)\Acrylic DNS Proxy\AcrylicHosts.txt" "`r`n172.23.66.58  jeu-2002.home.arpa"
+
+  Explication :
+    - Add-Content : ajoute du texte à la fin d'un fichier existant
+    - "`r`n" : retour chariot + saut de ligne (CRLF, format Windows)
+    - 172.23.66.58 : IP de la machine WSL hébergeant Docker
+    - jeu-2002.home.arpa : nom de domaine à résoudre
+
+  ⚠️ Doit être exécuté en PowerShell Administrateur
+
+
+───────────────────────────────────────────────────────────────────────
+  ÉTAPE 7 — REDÉMARRER LE SERVICE ACRYLIC
+───────────────────────────────────────────────────────────────────────
+
+  Commande :
+    Restart-Service AcrylicDNSProxySvc
+
+  Explication :
+    - Restart-Service : redémarre un service Windows
+    - AcrylicDNSProxySvc : nom du service Acrylic DNS Proxy
+    → Nécessaire pour qu'Acrylic recharge le fichier AcrylicHosts.txt
+
+
+───────────────────────────────────────────────────────────────────────
+  ÉTAPE 8 — TESTER LA RÉSOLUTION DNS VIA ACRYLIC DIRECTEMENT
+───────────────────────────────────────────────────────────────────────
+
+  Commande :
+    Resolve-DnsName jeu-2002.home.arpa -Server 127.0.0.1
+
+  Explication :
+    - Resolve-DnsName : résout un nom de domaine (comme nslookup)
+    - jeu-2002.home.arpa : le nom à résoudre
+    - -Server 127.0.0.1 : force la requête vers Acrylic localement
+    → Permet de tester Acrylic indépendamment de la config Windows
+
+
+───────────────────────────────────────────────────────────────────────
+  ÉTAPE 9 — SOLUTION DE SECOURS : FICHIER HOSTS WINDOWS NATIF
+───────────────────────────────────────────────────────────────────────
+
+  Commande :
+    Add-Content "C:\Windows\System32\drivers\etc\hosts" "`r`n172.23.66.58  jeu-2002.home.arpa"
+
+  Explication :
+    - Le fichier hosts Windows est lu EN PRIORITÉ avant tout DNS
+    - Pas besoin d'Acrylic ni d'un service DNS pour cette méthode
+    - Solution la plus simple pour un seul nom de domaine local
+    ⚠️ Doit être exécuté en PowerShell Administrateur
+
+  Vider le cache DNS après modification :
+    Clear-DnsClientCache
+
+  Explication :
+    - Efface le cache DNS Windows pour forcer la relecture
+    → Évite que l'ancienne réponse (NXDOMAIN) reste en cache
+
+
+───────────────────────────────────────────────────────────────────────
+  ÉTAPE 10 — TEST FINAL DE RÉSOLUTION DNS
+───────────────────────────────────────────────────────────────────────
+
+  Commande :
+    Resolve-DnsName jeu-2002.home.arpa
+
+  Résultat obtenu :
+    Name                Type  TTL    Section  IPAddress
+    ----                ----  ---    -------  ---------
+    jeu-2002.home.arpa  A     50960  Answer   172.23.66.58  ✅
+
+  → Le domaine est correctement résolu vers l'IP WSL
+
+
+───────────────────────────────────────────────────────────────────────
+  ÉTAPE 11 — IMPORTER LA ROOT CA DANS WINDOWS (certificat SSL)
+───────────────────────────────────────────────────────────────────────
+
+  Récupérer le certificat depuis le conteneur Docker (dans WSL) :
+    docker cp machine1_root_ca:/shared/pki/root_ca.crt /mnt/c/Users/TonUser/root_ca.crt
+
+  Importer dans le magasin Windows (PowerShell Admin) :
+    Import-Certificate -FilePath "C:\Users\TonUser\root_ca.crt" -CertStoreLocation Cert:\LocalMachine\Root
+
+  Explication :
+    - Import-Certificate : ajoute un certificat au magasin Windows
+    - -FilePath : chemin vers le fichier .crt de la Root CA
+    - -CertStoreLocation Cert:\LocalMachine\Root : magasin des
+      autorités de certification racines de confiance (système entier)
+    → Sans cette étape, le navigateur affiche une erreur SSL
+      même si le certificat est techniquement valide
+
+
+───────────────────────────────────────────────────────────────────────
+  NOTE IMPORTANTE — POURQUOI https://127.0.0.1/ AFFICHE UN BOUCLIER BARRÉ
+───────────────────────────────────────────────────────────────────────
+
+  Le certificat SSL a été émis pour "jeu-2002.home.arpa" et non
+  pour l'adresse IP 127.0.0.1. Le navigateur vérifie que le nom
+  dans la barre d'adresse correspond au champ SAN (Subject Alternative
+  Name) du certificat.
+
+  - https://127.0.0.1/          → ⚠️ Bouclier barré (normal, IP non dans le SAN)
+  - https://jeu-2002.home.arpa/ → 🔒 Cadenas vert (certificat valide)
+
+  → Toujours accéder via le nom de domaine, jamais via l'IP.
+
+
+───────────────────────────────────────────────────────────────────────
+  NOTE FIREFOX
+───────────────────────────────────────────────────────────────────────
+
+  Firefox possède son propre magasin de certificats, indépendant
+  de Windows. L'import via Import-Certificate ne suffit pas.
+
+  Dans Firefox :
+    1. Aller dans about:preferences#privacy
+    2. Section "Certificats" → cliquer "Afficher les certificats"
+    3. Onglet "Autorités" → cliquer "Importer"
+    4. Sélectionner root_ca.crt
+    5. Cocher "Confirmer cette AC pour identifier des sites web"
+    6. Redémarrer Firefox
+
+
+───────────────────────────────────────────────────────────────────────
+  RÉSUMÉ DES FICHIERS MODIFIÉS
+───────────────────────────────────────────────────────────────────────
+
+  C:\Program Files (x86)\Acrylic DNS Proxy\AcrylicHosts.txt
+    → Ajout : 172.23.66.58  jeu-2002.home.arpa
+
+  C:\Windows\System32\drivers\etc\hosts  (solution de secours)
+    → Ajout : 172.23.66.58  jeu-2002.home.arpa
+
+  Cert:\LocalMachine\Root  (magasin certificats Windows)
+    → Import : root_ca.crt
+
+
+───────────────────────────────────────────────────────────────────────
+  FLUX FINAL FONCTIONNEL
+───────────────────────────────────────────────────────────────────────
+
+  Browser Windows
+      │  https://jeu-2002.home.arpa/
+      ▼
+  Fichier hosts Windows (ou Acrylic 127.0.0.1:53)
+      │  jeu-2002.home.arpa → 172.23.66.58
+      ▼
+  WSL Hyper-V (172.23.66.58)
+      │  port 443
+      ▼
+  Docker → machine3_webserver (Nginx HTTPS)
+      │  certificat signé par Root CA de confiance
+      ▼
+  🔒 Cadenas vert ✅
+
+═══════════════════════════════════════════════════════════════════════

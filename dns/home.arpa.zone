@@ -1,0 +1,22 @@
+; ─────────────────────────────────────────────
+; Zone home.arpa
+; jeu-2002.home.arpa → 127.0.0.1
+; ─────────────────────────────────────────────
+
+$TTL 300
+
+@   IN  SOA     ns1.home.arpa. admin.home.arpa. (
+                2026050601  ; numéro de série — incrémente à chaque modif
+                3600        ; refresh
+                900         ; retry
+                604800      ; expire
+                300         ; TTL minimum
+                )
+
+; Serveur de noms
+@           IN  NS      ns1.home.arpa.
+
+; Enregistrements A
+ns1         IN  A       127.0.0.1
+jeu-2002    IN  A       127.0.0.1
+*.jeu-2002  IN  A       127.0.0.1

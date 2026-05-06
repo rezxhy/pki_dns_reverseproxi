@@ -1,0 +1,77 @@
+version: "3.9"
+
+# ═══════════════════════════════════════════════════════════
+#  PKI Docker — 4 machines
+#
+#  Machine 1 : Root CA        → crée root_ca.key + root_ca.crt
+#  Machine 2 : AC Filles      → crée int_ca_1/2 + server.crt
+#  Machine 3 : Nginx HTTPS    → https://jeu-2002.home.arpa:8443
+#  Machine 4 : DNS bind9      → jeu-2002.home.arpa → 127.0.0.1
+#
+#  Volume partagé : pki_shared → /shared/pki dans chaque conteneur
+# ═══════════════════════════════════════════════════════════
+
+volumes:
+  pki_shared:
+
+services:
+
+  # ─────────────────────────────────────────────
+  # Machine 1 — Root CA
+  # ─────────────────────────────────────────────
+  root_ca:
+    build: ./root_ca
+    container_name: machine1_root_ca
+    volumes:
+      - pki_shared:/shared/pki
+    networks:
+      - pki_net
+
+  # ─────────────────────────────────────────────
+  # Machine 2 — AC Filles + Certificat serveur
+  # ─────────────────────────────────────────────
+  intermediate_ca:
+    build: ./intermediate_ca
+    container_name: machine2_intermediate_ca
+    volumes:
+      - pki_shared:/shared/pki
+    depends_on:
+      - root_ca
+    networks:
+      - pki_net
+
+  # ─────────────────────────────────────────────
+  # Machine 3 — Webserver Nginx HTTPS
+  # Accès : https://jeu-2002.home.arpa:8443
+  # ─────────────────────────────────────────────
+  webserver:
+    build: ./webserver
+    container_name: machine3_webserver
+    volumes:
+      - pki_shared:/shared/pki
+    depends_on:
+      - intermediate_ca
+    ports:
+      - "80:80"
+      - "443:443"
+    networks:
+      - pki_net
+
+  # ─────────────────────────────────────────────
+  # Machine 4 — DNS bind9 + DNSSEC
+  # Zone : home.arpa → jeu-2002.home.arpa = 127.0.0.1
+  # ─────────────────────────────────────────────
+  dns:
+    build: ./dns
+    container_name: machine4_dns
+    ports:
+      - "5454:53/udp"
+      - "5454:53/tcp"
+    cap_add:
+      - NET_ADMIN
+    networks:
+      - pki_net
+
+networks:
+  pki_net:
+    driver: bridge
