@@ -1,0 +1,104 @@
+═══════════════════════════════════════════════════════════
+  RÉSUMÉ — CONFIGURATION UFW FIREWALL
+  Projet PKI + DNSSEC — jeu-2002.home.arpa
+  Date : 07/05/2026
+═══════════════════════════════════════════════════════════
+
+────────────────────────────────────────
+ 1. INSTALLATION ET ACTIVATION UFW
+────────────────────────────────────────
+
+  sudo apt install ufw -y
+  sudo ufw enable
+
+────────────────────────────────────────
+ 2. RÈGLES APPLIQUÉES
+────────────────────────────────────────
+
+  # SSH (ne pas se couper de l'accès admin)
+  sudo ufw allow 22/tcp
+
+  # Webserver Nginx
+  sudo ufw allow 80/tcp
+  sudo ufw allow 443/tcp
+
+  # DNS DNSSEC (port 5454 = port 53 du container Docker exposé)
+  sudo ufw allow from 172.18.0.0/16 to any port 5454 proto udp
+  sudo ufw allow from 172.18.0.0/16 to any port 5454 proto tcp
+
+  # Bloquer tout le reste
+  sudo ufw default deny incoming
+  sudo ufw default allow outgoing
+
+────────────────────────────────────────
+ 3. RÉSULTAT FINAL — UFW STATUS
+────────────────────────────────────────
+
+  To                     Action      From
+  ─────────────────────────────────────────
+  22/tcp                 ALLOW IN    Anywhere
+  80/tcp                 ALLOW IN    Anywhere
+  443/tcp                ALLOW IN    Anywhere
+  5454/udp               ALLOW IN    172.18.0.0/16
+  5454/tcp               ALLOW IN    172.18.0.0/16
+
+  → Port DNS 5454 accessible UNIQUEMENT depuis le réseau Docker
+  → Tout autre trafic entrant est BLOQUÉ par défaut
+
+────────────────────────────────────────
+ 4. VÉRIFICATIONS EFFECTUÉES
+────────────────────────────────────────
+
+  a) UFW actif :
+     sudo ufw status verbose
+     → Status: active ✅
+
+  b) DNSSEC fonctionnel :
+     dig @127.0.0.1 -p 5454 +dnssec jeu-2002.home.arpa | grep -E "RRSIG|flags|status"
+     → status: NOERROR         ✅
+     → flags: do (DNSSEC OK)   ✅
+     → RRSIG présent           ✅
+
+  c) Site HTTPS accessible :
+     curl -k --resolve jeu-2002.home.arpa:443:127.0.0.1 https://jeu-2002.home.arpa -o /dev/null -w "%{http_code}"
+     → HTTP 200 ✅
+
+  d) Port non autorisé bloqué :
+     curl -k --resolve jeu-2002.home.arpa:9999:127.0.0.1 https://jeu-2002.home.arpa:9999 -o /dev/null -w "%{http_code}"
+     → 000 (connexion refusée) ✅
+
+────────────────────────────────────────
+ 5. EXPLICATIONS IMPORTANTES
+────────────────────────────────────────
+
+  - Le port DNS est 5454 (et non 53) car le container Docker
+    expose son port interne 53 sur le port 5454 de l'hôte :
+      ports:
+        - "5454:53/udp"
+        - "5454:53/tcp"
+
+  - UFW ne filtre pas l'interface loopback (lo / 127.0.0.1)
+    → C'est normal, le loopback est toujours accessible
+
+  - Docker peut contourner UFW via iptables.
+    Pour l'en empêcher (optionnel) :
+      sudo nano /etc/docker/daemon.json
+      Ajouter : { "iptables": false }
+      sudo systemctl restart docker
+
+  - Les logs UFW (/var/log/ufw.log) ne fonctionnent pas
+    nativement sur WSL. Alternative :
+      sudo dmesg -T | grep UFW
+
+────────────────────────────────────────
+ 6. COMMANDE GLOBALE DE VÉRIFICATION
+────────────────────────────────────────
+
+  echo "=== UFW ===" && sudo ufw status | head -3
+  echo "=== DNSSEC ===" && dig @127.0.0.1 -p 5454 +dnssec jeu-2002.home.arpa | grep -E "RRSIG|NOERROR"
+  echo "=== HTTPS ===" && curl -k --resolve jeu-2002.home.arpa:443:127.0.0.1 https://jeu-2002.home.arpa -o /dev/null -w "HTTP: %{http_code}\n"
+  echo "=== Containers ===" && docker ps --format "{{.Names}}\t{{.Status}}"
+
+═══════════════════════════════════════════════════════════
+  STATUT FINAL : ✅ FIREWALL OPÉRATIONNEL
+═══════════════════════════════════════════════════════════
