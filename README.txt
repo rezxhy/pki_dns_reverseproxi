@@ -1,6 +1,7 @@
 ═══════════════════════════════════════════════════════════════
   PKI DOCKER — jeu-2002.home.arpa
-  Root AC → 2 AC Filles → Certificat serveur + DNSSEC
+  Root AC → 2 AC Filles → Certificat serveur + DNSSEC + Firewall 
+  (UFW)
 ═══════════════════════════════════════════════════════════════
 
 ── PRÉREQUIS ──────────────────────────────────────────────────
